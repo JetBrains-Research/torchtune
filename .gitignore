@@ -187,3 +187,6 @@ cover/
 
 # wandb
 wandb/
+
+# top repository level tokenizer and model dirs
+qwen2_*/*

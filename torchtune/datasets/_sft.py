@@ -5,6 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from typing import Any, Callable, Dict, Mapping, Optional
+import json
 
 import numpy as np
 from datasets import load_dataset
@@ -112,6 +113,19 @@ class SFTDataset(Dataset):
         self._model_transform = model_transform
 
         self._data = load_dataset(source, **load_dataset_kwargs)
+        
+        # Process all samples to parse JSON trajectories
+        processed_data = []
+        for sample in self._data:
+            if 'trajectory' in sample:
+                trajectory = json.loads(sample['trajectory'])
+                sample = dict(sample)
+                sample['messages'] = trajectory.get('messages', {})
+                sample['tools'] = trajectory.get('tools', {})
+            processed_data.append(sample)
+        
+        self._data = processed_data
+            
         if filter_fn is not None:
             if filter_kwargs is None:
                 filter_kwargs = {}

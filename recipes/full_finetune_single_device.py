@@ -779,7 +779,8 @@ class FullFinetuneRecipeSingleDevice(FTRecipeInterface):
                     break
 
             self.epochs_run += 1
-            self.save_checkpoint(epoch=curr_epoch)
+            
+        self.save_checkpoint(epoch=curr_epoch)
 
         self._profiler.stop()
 

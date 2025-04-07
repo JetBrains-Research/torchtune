@@ -176,8 +176,12 @@ class Qwen2_5Tokenizer(Qwen2Tokenizer):  # noqa: N801
             tokens.extend(self._tokenize_footer(templated_messages, i))
 
             tokenized_messages.extend(tokens)
-            mask.extend([message.masked] * len(tokens))
-
+            if not message.masked:
+                # masks "<im start>assistant\n"
+                mask.extend([True] * 3)  # Mask first 3 tokens
+                mask.extend([False] * (len(tokens) - 3))  # Unmask the rest
+            else:
+                mask.extend([message.masked] * len(tokens))
             # Break out early if we reach max_seq_len
             if self.max_seq_len and len(tokenized_messages) >= self.max_seq_len:
                 break

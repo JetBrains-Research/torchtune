@@ -4,6 +4,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+import json
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Mapping, Optional, Union
@@ -670,6 +671,35 @@ class OpenAIToMessages(Transform):
         else:
             self._column_map = {"messages": "messages"}
 
+    def _format_tool_calls(self, tool_calls: List[Dict]) -> str:
+        """Helper method to format tool calls consistently"""
+        tool_calls_formatted = []
+        for tool_call in tool_calls:
+            if "function" in tool_call:
+                func_name = tool_call["function"].get("name", "")
+                args_str = tool_call["function"].get("arguments", "{}")
+
+                try:
+                    # Ensure args_str is a string before parsing
+                    if isinstance(args_str, dict):
+                        args_dict = args_str
+                    else:
+                        args_dict = json.loads(args_str)
+                    
+                    args_formatted = []
+                    for k, v in args_dict.items():
+                        if isinstance(v, (int, float)):
+                            args_formatted.append(f"{k}={v}")
+                        else:
+                            args_formatted.append(f'{k}="{v}"')
+
+                    tool_calls_formatted.append(f"{func_name}({', '.join(args_formatted)})")
+                except json.JSONDecodeError:
+                    # Fallback for invalid JSON arguments string
+                    tool_calls_formatted.append(f'{func_name}(raw="{args_str}")')
+
+        return f"[{', '.join(tool_calls_formatted)}]"
+
     def _convert_from_openai_content(
         self, content: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
@@ -711,31 +741,58 @@ class OpenAIToMessages(Transform):
         for i, message in enumerate(messages):
             if message["role"] == "system" and self.new_system_prompt is not None:
                 continue
-            if isinstance(message["content"], list):
+
+            content = None
+            eot = True
+            has_tool_calls = False
+
+            # Handle assistant message with tool calls first
+            if message["role"] == "assistant" and "tool_calls" in message and message["tool_calls"]:
+                content = self._format_tool_calls(message["tool_calls"])
+                # eot = False # Assistant turn continues with tool execution
+                has_tool_calls = True
+            elif isinstance(message["content"], list):
                 content = self._convert_from_openai_content(message["content"])
             elif isinstance(message["content"], str):
-                content = message["content"]
+                # Also handle case where content is null/None for assistant message if tool_calls were present but content wasn't
+                if not (message["role"] == "assistant" and message.get("content") is None and has_tool_calls):
+                     content = message["content"]
+            elif message["role"] == "tool":
+                # Tool results are expected to be strings
+                content = str(message.get("content", ""))
 
-            eot = True
-            if message["role"] in ["tool", "ipython"]:
-                # After tool responses, turn is not over, because assistant will interpret the tool response.
+
+            # Skip message creation if content is None (e.g. assistant message with only tool_calls and null content)
+            # unless it's a tool call message itself (which might have empty content represented as a string)
+            if content is None and message["role"] != "tool":
+                continue
+
+
+            # Determine EOT status
+            if message["role"] == "tool":
+                # After tool responses, turn is not over, because assistant will likely respond.
                 eot = False
-            elif message["role"] == "assistant":
-                # If the next message is a tool response instead of a user message
+            elif message["role"] == "assistant" and not has_tool_calls:
+                # If the *next* message is a tool response instead of a user message,
                 # the current assistant message is not the end of the turn.
-                # Models like Llama will append EOM to the end of the assistant message for tool calls.
+                # This handles cases where assistant speaks, then tool result comes.
                 has_next_message = i < len(messages) - 1
                 if has_next_message and messages[i + 1]["role"] in ["tool", "ipython"]:
                     eot = False
 
-            updated_messages.append(
-                Message(
-                    role=message["role"],
-                    content=content,
-                    eot=eot,
-                ),
-            )
+            # If content ended up being None (e.g. purely image message not handled)
+            # This check prevents adding empty messages unless they are tool calls.
+            if content is not None:
+                 updated_messages.append(
+                    Message(
+                        role=message["role"],
+                        content=content,
+                        eot=eot,
+                    ),
+                )
+                 
         mask_messages(updated_messages, self.masking_strategy)
+        
         return {"messages": updated_messages}
 
 
@@ -891,10 +948,10 @@ def validate_messages(
             raise ValueError(
                 f"System message at index {i} in messages, but system messages must come first"
             )
-        if message.role in ["tool", "ipython"] and not last_message.ipython:
-            raise ValueError(
-                f"Tool or ipython message at index {i} must follow an ipython message"
-            )
+        #if message.role in ["tool", "ipython"] and not last_message.ipython:
+        #    raise ValueError(
+        #        f"Tool or ipython message at index {i} must follow an ipython message"
+        #    )
         last_message = message
 
 
@@ -918,6 +975,11 @@ def mask_messages(messages: List[Message], masking_strategy: MaskingStrategy) ->
         if message.role == "system":
             message.masked = True
             continue
+        # Tool messages (results) are always masked as the model shouldn't predict them
+        elif message.role == "tool":
+            message.masked = True
+            continue
+
         if masking_strategy == MaskingStrategy.TRAIN_ON_LAST:
             if message.role == "assistant" and not marked_last_assistant_message:
                 message.masked = False
