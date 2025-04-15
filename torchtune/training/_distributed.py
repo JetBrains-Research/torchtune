@@ -45,7 +45,7 @@ torch_version = torch.__version__
 # _DISTRIBUTED_STATE_DICT_API_IS_AVAILABLE = (
 #     "dev" not in torch_version and torch_version_ge("2.6.0")
 # ) or ("dev" in torch_version and torch_version.split("dev")[1] >= "20241220")
-_DISTRIBUTED_STATE_DICT_API_IS_AVAILABLE = False
+_DISTRIBUTED_STATE_DICT_API_IS_AVAILABLE = True
 
 
 @dataclass
@@ -313,7 +313,9 @@ def load_from_full_model_state_dict(
     # NF4Tensor is not supported in `set_model_state_dict` right now, running with the previous logic right
     # now, would support in the future and remove the following code
     if _DISTRIBUTED_STATE_DICT_API_IS_AVAILABLE and not has_nf4:
+        print("DISTRIBUTED STATE DICT API IS AVAILABLE")
         for param_name in full_sd.keys():
+            print(f"Loading {param_name}")
             sharded_meta_param = meta_sharded_sd.get(param_name)
             full_sd[param_name] = full_sd[param_name].to(sharded_meta_param.dtype)
         options = StateDictOptions(
@@ -326,8 +328,10 @@ def load_from_full_model_state_dict(
             model=model, model_state_dict=full_sd, options=options
         )
     else:
+        print("DISTRIBUTED STATE DICT API IS **NOT** AVAILABLE")
         sharded_sd = {}
         for param_name, full_tensor in full_sd.items():
+            print(f"Loading {param_name}")
             sharded_meta_param = meta_sharded_sd.get(param_name)
             full_tensor = full_tensor.to(sharded_meta_param.dtype).to(device)
             if hasattr(sharded_meta_param, "_local_tensor") and isinstance(
